@@ -206,6 +206,37 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+/*FUNCION QUE DEUVELVE PARA UN YEAR EL CUMULATIVE DATA DEL FINAL*/
+
+CREATE OR REPLACE FUNCTION year_cumulative_stats(aYear INTEGER)
+RETURNS TABLE (
+  category TEXT,
+  total BIGINT,
+  avgage NUMERIC,
+  minage NUMERIC,
+  maxage NUMERIC,
+  avgweight NUMERIC,
+  minweight NUMERIC,
+  maxweight NUMERIC
+)
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT
+    'Aggregate' AS category,
+    SUM(nacimientos) AS total,
+    ROUND(AVG(m_edad_prom)::numeric, 0) AS avgage,
+    ROUND(MIN(m_edad_prom)::numeric, 0) AS minage,
+    ROUND(MAX(m_edad_prom)::numeric, 0) AS maxage,
+    ROUND(CAST(AVG(avg_birth_weight) / 1000.0 AS numeric), 3) AS avgweight,
+    ROUND(CAST(MIN(avg_birth_weight) / 1000.0 AS numeric), 3) AS minweight,
+    ROUND(CAST(MAX(avg_birth_weight) / 1000.0 AS numeric), 3) AS maxweight
+  FROM
+    temp_table
+  WHERE
+    anio = aYear;
+END;
+$$ LANGUAGE plpgsql;
 
 /*FUNCION QUE CALCULA LOS STATS PARA UN ANO */
 
@@ -214,15 +245,6 @@ RETURNS VOID
 AS $$
 DECLARE
     row_result RECORD;
-    total_total INTEGER := 0;
-    count_total INTEGER := 0;
-    avg_avgage NUMERIC := 0;
-    avg_minage NUMERIC := 0;
-    avg_maxage NUMERIC := 0;
-    avg_avgweight NUMERIC := 0;
-    avg_minweight NUMERIC := 0;
-    avg_maxweight NUMERIC := 0;
-    result_string TEXT := '';
 BEGIN
     FOR row_result IN (
         SELECT *
@@ -239,32 +261,16 @@ BEGIN
 
             SELECT *
             FROM year_education_stats(aYear)
+
+            UNION ALL
+
+            SELECT *
+            FROM year_cumulative_stats(aYear)
         ) AS subquery
     )
     LOOP
         RAISE NOTICE '%', row_result;
-        total_total := total_total + row_result.total;
-        count_total := count_total + 1;
-        avg_avgage := avg_avgage + row_result.avg_age;
-        avg_minage := avg_minage + row_result.min_age;
-        avg_maxage := avg_maxage + row_result.max_age;
-        avg_avgweight := avg_avgweight + row_result.avg_weight;
-        avg_minweight := avg_minweight + row_result.min_weight;
-        avg_maxweight := avg_maxweight + row_result.max_weight;
     END LOOP;
-    
-    avg_avgage := ROUND(avg_avgage / count_total);
-    avg_minage := ROUND(avg_minage / count_total);
-    avg_maxage := ROUND(avg_maxage / count_total);
-    avg_avgweight := ROUND(avg_avgweight / count_total, 3);
-    avg_minweight := ROUND(avg_minweight / count_total, 3);
-    avg_maxweight := ROUND(avg_maxweight / count_total, 3);
-    
-    result_string := 'Total Aggregate: ' || total_total || ', Average AvgAge: ' || avg_avgage || ', Average MinAge: ' || avg_minage ||
-                     ', Average MaxAge: ' || avg_maxage || ', Average AvgWeight: ' || avg_avgweight || ', Average MinWeight: ' ||
-                     avg_minweight || ', Average MaxWeight: ' || avg_maxweight;
-    
-    RAISE NOTICE '%', result_string;
 END;
 $$ LANGUAGE plpgsql;
 
