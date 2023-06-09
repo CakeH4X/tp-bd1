@@ -89,8 +89,7 @@ COPY temp_table FROM '/Library/PostgreSQL/15/us_births_2016_2021.csv' WITH (FORM
 DROP FUNCTION IF EXISTS year_state_stats(integer);
 DROP FUNCTION IF EXISTS year_gender_stats(integer);
 DROP FUNCTION IF EXISTS year_education_stats(integer);
-DROP FUNCTION IF EXISTS reporte_consolidado;
-DROP FUNCTION IF EXISTS es_año_bisiesto;
+DROP FUNCTION IF EXISTS year_cumulative_stats(integer);
 DROP FUNCTION IF EXISTS year_calculate_stats(aYear INTEGER);
 DROP FUNCTION IF EXISTS year_calculate_stats(aYear INTEGER);
 DROP FUNCTION IF EXISTS ReporteConsolidado(N INTEGER);
