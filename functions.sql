@@ -2,18 +2,7 @@ DROP TABLE IF EXISTS estado CASCADE;
 DROP TABLE IF EXISTS anio CASCADE;
 DROP TABLE IF EXISTS nivel_educacion CASCADE;
 DROP TABLE IF EXISTS temp_table CASCADE;
-
-CREATE TABLE temp_table (
-        estado_desc         TEXT,
-        estado_abr          CHAR(2),
-        anio                INT,
-        genero              CHAR,
-        edu_desc            TEXT,
-        edu_code            INT,
-        nacimientos         INT,
-        m_edad_prom         FLOAT,
-        avg_birth_weight    FLOAT
-);
+DROP TABLE IF EXISTS definitive_table CASCADE;
 
 CREATE TABLE estado(
         estado_desc     TEXT NOT NULL,
@@ -32,6 +21,44 @@ CREATE TABLE nivel_educacion(
         edu_desc       TEXT NOT NULL,
         PRIMARY KEY(edu_code)
 );
+
+CREATE TABLE temp_table (
+        estado_desc         TEXT,
+        estado_abr          CHAR(2),
+        anio                INT,
+        genero              CHAR,
+        edu_desc            TEXT,
+        edu_code            INT,
+        nacimientos         INT,
+        m_edad_prom         FLOAT,
+        avg_birth_weight    FLOAT
+);
+
+CREATE TABLE definitive_table (
+        estado_desc         TEXT,
+        estado_abr          CHAR(2),
+        anio                INT,
+        genero              CHAR,
+        edu_desc            TEXT,
+        edu_code            INT,
+        nacimientos         INT,
+        m_edad_prom         FLOAT,
+        avg_birth_weight    FLOAT,
+        PRIMARY KEY(estado_abr, anio, genero, edu_code),
+        FOREIGN KEY(estado_abr) REFERENCES estado(estado_abr) ON DELETE CASCADE,
+        FOREIGN KEY(anio) REFERENCES anio(anio) ON DELETE CASCADE,
+        FOREIGN KEY(edu_code) REFERENCES nivel_educacion(edu_code) ON DELETE CASCADE
+);
+
+DROP FUNCTION IF EXISTS insert_estado() CASCADE;
+DROP FUNCTION IF EXISTS insert_anio() CASCADE;
+DROP FUNCTION IF EXISTS insert_nivel_educacion() CASCADE;
+DROP FUNCTION IF EXISTS year_state_stats(INTEGER) CASCADE;
+DROP FUNCTION IF EXISTS year_gender_stats(INTEGER) CASCADE;
+DROP FUNCTION IF EXISTS year_education_stats(INTEGER) CASCADE;
+DROP FUNCTION IF EXISTS year_cumulative_stats(INTEGER) CASCADE;
+DROP FUNCTION IF EXISTS year_calculate_stats(INTEGER) CASCADE;
+DROP FUNCTION IF EXISTS ReporteConsolidado(INTEGER) CASCADE;
 
 
 CREATE OR REPLACE FUNCTION insert_estado() RETURNS TRIGGER AS $$
@@ -61,7 +88,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-
 DROP TRIGGER IF EXISTS insert_estado_trigger ON temp_table;
 DROP TRIGGER IF EXISTS insert_anio_trigger ON temp_table;
 DROP TRIGGER IF EXISTS insert_nivel_educacion_trigger ON temp_table;
@@ -83,16 +109,19 @@ EXECUTE FUNCTION insert_nivel_educacion();
 
 COPY temp_table FROM '/Library/PostgreSQL/15/us_births_2016_2021.csv' WITH (FORMAT csv, HEADER true, DELIMITER ',');
 
+INSERT INTO definitive_table(estado_desc, estado_abr, anio, genero, edu_desc, edu_code, nacimientos, m_edad_prom, avg_birth_weight)
+SELECT estado.estado_desc, estado.estado_abr, anio.anio, temp_table.genero, nivel_educacion.edu_desc, nivel_educacion.edu_code, temp_table.nacimientos, 
+temp_table.m_edad_prom, temp_table.avg_birth_weight
+FROM estado, anio, temp_table, nivel_educacion
+WHERE estado.estado_abr = temp_table.estado_abr
+        AND anio.anio = temp_table.anio
+        AND nivel_educacion.edu_code = temp_table.edu_code
+        AND nivel_educacion.edu_desc = temp_table.edu_desc;
+
 /* ------------------------------------------------------------------------ */
 /* ----------------------- DECLARACION DE FUNCIONES ----------------------- */
 /* -------------------------- Y DATOS DE SALIDA --------------------------- */
-DROP FUNCTION IF EXISTS year_state_stats(integer);
-DROP FUNCTION IF EXISTS year_gender_stats(integer);
-DROP FUNCTION IF EXISTS year_education_stats(integer);
-DROP FUNCTION IF EXISTS year_cumulative_stats(integer);
-DROP FUNCTION IF EXISTS year_calculate_stats(aYear INTEGER);
-DROP FUNCTION IF EXISTS year_calculate_stats(aYear INTEGER);
-DROP FUNCTION IF EXISTS ReporteConsolidado(N INTEGER);
+
 
 /* FUNCION QUE DEVUELVE PARA UN year UN QUERY QUE TIENE LA INFO DE CADA ESTADO */
 
@@ -222,7 +251,7 @@ AS $$
 BEGIN
   RETURN QUERY
   SELECT
-    'Aggregate' AS category,
+    '' AS category,
     SUM(nacimientos) AS total,
     ROUND(AVG(m_edad_prom)::numeric, 0) AS avgage,
     ROUND(MIN(m_edad_prom)::numeric, 0) AS minage,
@@ -243,9 +272,11 @@ CREATE OR REPLACE FUNCTION year_calculate_stats(aYear INTEGER)
 RETURNS VOID
 AS $$
 DECLARE
+    agregado RECORD;
     row_result RECORD;
+    printYear BOOL := TRUE;
 BEGIN
-    FOR row_result IN (
+	    FOR row_result IN (
         SELECT *
         FROM (
             SELECT *
@@ -261,15 +292,20 @@ BEGIN
             SELECT *
             FROM year_education_stats(aYear)
 
-            UNION ALL
-
-            SELECT *
-            FROM year_cumulative_stats(aYear)
         ) AS subquery
     )
     LOOP
-        RAISE NOTICE '%', row_result;
+        IF printYear = TRUE THEN
+            RAISE NOTICE '%   %', aYear, row_result;
+            printYear := FALSE;
+        ELSE
+            RAISE NOTICE '----   %', row_result;
+        END IF;
     END LOOP;
+
+    SELECT * INTO agregado FROM year_cumulative_stats(aYear);
+    RAISE NOTICE '--------------------------------------------------------------------------------------------- %', agregado;
+    RAISE NOTICE '========================================================================================================================================================================';
 END;
 $$ LANGUAGE plpgsql;
 
@@ -282,6 +318,17 @@ AS $$
 DECLARE
     year_value INTEGER;
 BEGIN
+    IF N < 1 THEN
+        RETURN;
+    END IF;
+    IF N > (SELECT COUNT(anio) FROM anio) THEN
+        N := (SELECT COUNT(anio) FROM anio);
+    END IF;
+
+    RAISE NOTICE '========================================================================================================================================================================';
+    RAISE NOTICE '=========================================================================CONSOLIDATED BIRTH REPORT======================================================================';
+    RAISE NOTICE 'Year===Category========================================================================================Total=====AvgAge==MinAge==MaxAge==AvgWeight==MinWeight==MaxWeight';
+    RAISE NOTICE '------------------------------------------------------------------------------------------------------------------------------------------------------------------------';
     FOR year_value IN (
         SELECT anio
         FROM anio
@@ -293,12 +340,3 @@ BEGIN
     END LOOP;
 END;
 $$ LANGUAGE plpgsql;
-
-
-/* PARA CORRER EL COMANDO USAR LOS SIG COMANDOS */
-
-DO $$
-BEGIN
-PERFORM ReporteConsolidado(2);
-END;
-$$ LANGUAGE PLPGSQL;
