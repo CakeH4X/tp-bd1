@@ -3,6 +3,7 @@ DROP TABLE IF EXISTS anio CASCADE;
 DROP TABLE IF EXISTS nivel_educacion CASCADE;
 DROP TABLE IF EXISTS temp_table CASCADE;
 DROP TABLE IF EXISTS definitive_table CASCADE;
+DROP FUNCTION IF EXISTS ReporteConsolidado(n INTEGER);
 
 CREATE TABLE estado(
         estado_desc     TEXT NOT NULL,
@@ -22,7 +23,7 @@ CREATE TABLE nivel_educacion(
         PRIMARY KEY(edu_code)
 );
 
-CREATE TABLE temp_table (
+CREATE TEMP TABLE temp_table (
         estado_desc         TEXT,
         estado_abr          CHAR(2),
         anio                INT,
@@ -35,11 +36,9 @@ CREATE TABLE temp_table (
 );
 
 CREATE TABLE definitive_table (
-        estado_desc         TEXT,
         estado_abr          CHAR(2),
-        anio                INT,
+        anio                INT CHECK (anio >= 1900),
         genero              CHAR,
-        edu_desc            TEXT,
         edu_code            INT,
         nacimientos         INT,
         m_edad_prom         FLOAT,
@@ -50,9 +49,7 @@ CREATE TABLE definitive_table (
         FOREIGN KEY(edu_code) REFERENCES nivel_educacion(edu_code) ON DELETE CASCADE
 );
 
-DROP FUNCTION IF EXISTS insert_estado() CASCADE;
-DROP FUNCTION IF EXISTS insert_anio() CASCADE;
-DROP FUNCTION IF EXISTS insert_nivel_educacion() CASCADE;
+
 DROP FUNCTION IF EXISTS year_state_stats(INTEGER) CASCADE;
 DROP FUNCTION IF EXISTS year_gender_stats(INTEGER) CASCADE;
 DROP FUNCTION IF EXISTS year_education_stats(INTEGER) CASCADE;
@@ -60,63 +57,36 @@ DROP FUNCTION IF EXISTS year_cumulative_stats(INTEGER) CASCADE;
 DROP FUNCTION IF EXISTS year_calculate_stats(INTEGER) CASCADE;
 DROP FUNCTION IF EXISTS ReporteConsolidado(INTEGER) CASCADE;
 
-
-CREATE OR REPLACE FUNCTION insert_estado() RETURNS TRIGGER AS $$
+CREATE OR REPLACE FUNCTION distribuir_nacimientos() RETURNS TRIGGER AS $$
 BEGIN
-    IF NOT EXISTS (SELECT * FROM estado WHERE estado_abr = NEW.estado_abr) THEN
-        INSERT INTO estado (estado_desc, estado_abr) VALUES (NEW.estado_desc, NEW.estado_abr);
-    END IF;
+    INSERT INTO estado (estado_desc, estado_abr) 
+    VALUES (NEW.estado_desc, NEW.estado_abr)
+    ON CONFLICT (estado_abr) DO NOTHING;
+
+    INSERT INTO anio (anio, es_bisiesto)
+    VALUES (NEW.anio, ((NEW.anio % 4 = 0 AND NEW.anio % 100 != 0) OR NEW.anio % 400 = 0))
+    ON CONFLICT (anio) DO NOTHING;
+
+    INSERT INTO nivel_educacion (edu_code, edu_desc)
+    VALUES (NEW.edu_code, NEW.edu_desc)
+    ON CONFLICT (edu_code) DO NOTHING;
+
+    INSERT INTO definitive_table (estado_abr, anio, genero, edu_code, nacimientos, m_edad_prom, avg_birth_weight)
+    VALUES (NEW.estado_abr, NEW.anio, NEW.genero, NEW.edu_code, NEW.nacimientos, NEW.m_edad_prom, NEW.avg_birth_weight);
+
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION insert_anio() RETURNS TRIGGER AS $$
-BEGIN
-    IF NOT EXISTS (SELECT * FROM anio WHERE anio = NEW.anio) THEN
-        INSERT INTO anio (anio, es_bisiesto) VALUES (NEW.anio, ((NEW.anio % 4 = 0 AND NEW.anio % 100 != 0) OR NEW.anio % 400 = 0));
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION insert_nivel_educacion() RETURNS TRIGGER AS $$
-BEGIN
-    IF NOT EXISTS (SELECT * FROM nivel_educacion WHERE edu_code = NEW.edu_code) THEN
-        INSERT INTO nivel_educacion (edu_code, edu_desc) VALUES (NEW.edu_code, NEW.edu_desc);
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS distribuir_nacimientos_trigger ON temp_table;
 
-DROP TRIGGER IF EXISTS insert_estado_trigger ON temp_table;
-DROP TRIGGER IF EXISTS insert_anio_trigger ON temp_table;
-DROP TRIGGER IF EXISTS insert_nivel_educacion_trigger ON temp_table;
-
-CREATE TRIGGER insert_estado_trigger
-AFTER INSERT ON temp_table
+CREATE TRIGGER distribuir_nacimientos_trigger
+BEFORE INSERT ON temp_table
 FOR EACH ROW
-EXECUTE FUNCTION insert_estado();
-
-CREATE TRIGGER insert_anio_trigger
-AFTER INSERT ON temp_table
-FOR EACH ROW
-EXECUTE FUNCTION insert_anio();
-
-CREATE TRIGGER insert_nivel_educacion_trigger
-AFTER INSERT ON temp_table
-FOR EACH ROW
-EXECUTE FUNCTION insert_nivel_educacion();
+EXECUTE FUNCTION distribuir_nacimientos();
 
 COPY temp_table FROM '/Library/PostgreSQL/15/us_births_2016_2021.csv' WITH (FORMAT csv, HEADER true, DELIMITER ',');
-
-INSERT INTO definitive_table(estado_desc, estado_abr, anio, genero, edu_desc, edu_code, nacimientos, m_edad_prom, avg_birth_weight)
-SELECT estado.estado_desc, estado.estado_abr, anio.anio, temp_table.genero, nivel_educacion.edu_desc, nivel_educacion.edu_code, temp_table.nacimientos, 
-temp_table.m_edad_prom, temp_table.avg_birth_weight
-FROM estado, anio, temp_table, nivel_educacion
-WHERE estado.estado_abr = temp_table.estado_abr
-        AND anio.anio = temp_table.anio
-        AND nivel_educacion.edu_code = temp_table.edu_code
-        AND nivel_educacion.edu_desc = temp_table.edu_desc;
 
 /* ------------------------------------------------------------------------ */
 /* ----------------------- DECLARACION DE FUNCIONES ----------------------- */
@@ -147,7 +117,7 @@ BEGIN
        ROUND(CAST(AVG(avg_birth_weight) / 1000.0 AS numeric), 3) AS avg_weight,
        ROUND(CAST(MIN(avg_birth_weight) / 1000.0 AS numeric), 3) AS min_weight,
        ROUND(CAST(MAX(avg_birth_weight) / 1000.0 AS numeric), 3) AS max_weight
-FROM temp_table
+FROM definitive_table NATURAL JOIN estado
 WHERE anio = aYear
 GROUP BY estado_desc
 HAVING SUM(nacimientos) > 200000
@@ -180,7 +150,7 @@ BEGIN
          ROUND(CAST(AVG(avg_birth_weight) / 1000.0 AS numeric), 3) AS AvgWeight,
          ROUND(CAST(MIN(avg_birth_weight) / 1000.0 AS numeric), 3) AS MinWeight,
          ROUND(CAST(MAX(avg_birth_weight) / 1000.0 AS numeric), 3) AS MaxWeight
-  FROM temp_table
+  FROM definitive_table
   WHERE anio = aYear AND genero = 'M'
 
   UNION ALL
@@ -193,7 +163,7 @@ BEGIN
          ROUND(CAST(AVG(avg_birth_weight) / 1000.0 AS numeric), 3) AS AvgWeight,
          ROUND(CAST(MIN(avg_birth_weight) / 1000.0 AS numeric), 3) AS MinWeight,
          ROUND(CAST(MAX(avg_birth_weight) / 1000.0 AS numeric), 3) AS MaxWeight
-  FROM temp_table
+  FROM definitive_table
   WHERE anio = aYear AND genero = 'F';
 
   RETURN;
@@ -217,7 +187,7 @@ RETURNS TABLE (
 AS $$
 BEGIN
   RETURN QUERY
-  SELECT edu_desc AS category,
+  SELECT 'Education: ' || edu_desc AS category,
          SUM(nacimientos) AS total,
          ROUND(AVG(m_edad_prom)::numeric, 0) AS AvgAge,
          ROUND(MIN(m_edad_prom)::numeric, 0) AS MinAge,
@@ -225,7 +195,7 @@ BEGIN
          ROUND(CAST(AVG(avg_birth_weight) / 1000.0 AS numeric), 3) AS AvgWeight,
          ROUND(CAST(MIN(avg_birth_weight) / 1000.0 AS numeric), 3) AS MinWeight,
          ROUND(CAST(MAX(avg_birth_weight) / 1000.0 AS numeric), 3) AS MaxWeight
-  FROM temp_table
+  FROM definitive_table NATURAL JOIN nivel_educacion
   WHERE anio = aYear AND edu_code != -9
   GROUP BY edu_desc
   ORDER BY edu_desc DESC;
@@ -251,7 +221,7 @@ AS $$
 BEGIN
   RETURN QUERY
   SELECT
-    '' AS category,
+    '--------------------------------------------------------------------------------------------- ' AS category,
     SUM(nacimientos) AS total,
     ROUND(AVG(m_edad_prom)::numeric, 0) AS avgage,
     ROUND(MIN(m_edad_prom)::numeric, 0) AS minage,
@@ -260,7 +230,7 @@ BEGIN
     ROUND(CAST(MIN(avg_birth_weight) / 1000.0 AS numeric), 3) AS minweight,
     ROUND(CAST(MAX(avg_birth_weight) / 1000.0 AS numeric), 3) AS maxweight
   FROM
-    temp_table
+    definitive_table
   WHERE
     anio = aYear;
 END;
@@ -304,8 +274,8 @@ BEGIN
     END LOOP;
 
     SELECT * INTO agregado FROM year_cumulative_stats(aYear);
-    RAISE NOTICE '--------------------------------------------------------------------------------------------- %', agregado;
-    RAISE NOTICE '========================================================================================================================================================================';
+    RAISE NOTICE '%', agregado;
+    RAISE NOTICE '------------------------------------------------------------------------------------------------------------------------------------------------------------------------';
 END;
 $$ LANGUAGE plpgsql;
 
@@ -319,6 +289,7 @@ DECLARE
     year_value INTEGER;
 BEGIN
     IF N < 1 THEN
+        RAISE NOTICE 'ReporteConsolidado debe invocarse con un N > 0';
         RETURN;
     END IF;
     IF N > (SELECT COUNT(anio) FROM anio) THEN
